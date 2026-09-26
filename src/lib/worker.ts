@@ -1,4 +1,3 @@
-import { analyzeRepo, type RepoHealthResult, type ScanMode } from "@/lib/repo-health";
 import type { QueueTask } from "@/lib/queue";
 import {
   fetchOpenPullRequests,
@@ -6,97 +5,69 @@ import {
   normalizeGitHubRepoName,
 } from "@/lib/github-app";
 import { getInstallationTokenOrRefresh } from "@/lib/github-auth";
-import { saveAnalysisResult, savePullRequest } from "@/lib/persistence";
+import {
+  analyzerMetadata,
+  runRepoHealthAnalysis,
+  type RepoHealthResult,
+  type ScanMode,
+} from "@/lib/repo-health";
+import { listTasks, saveAnalysisResult, savePullRequest, updateTaskStatus } from "@/lib/persistence";
 
-function enrichReportWithMetadata(
-  repo: string,
-  mode: ScanMode,
-  metadata: Awaited<ReturnType<typeof fetchRepositoryMetadata>> | null,
-  pulls: Awaited<ReturnType<typeof fetchOpenPullRequests>>
-): RepoHealthResult {
-  const base = analyzeRepo(repo, mode);
+export type ProcessedTaskResult = {
+  taskId: string;
+  repo: string;
+  status: "completed";
+  result: RepoHealthResult;
+  processedAt: string;
+  analysisId: string;
+  pullRequests: number;
+};
 
-  if (!metadata) {
-    return base;
-  }
-
-  const scoreDelta = Math.max(-12, Math.min(12, (metadata.stargazers_count ?? 0) / 200 - (metadata.open_issues_count ?? 0) / 5));
-  const adjustedScore = Math.max(40, Math.min(98, Math.round(base.score + scoreDelta)));
-  const status = adjustedScore >= 85 ? "healthy" : adjustedScore >= 70 ? "watch" : "critical";
-  const openPrCount = pulls.length;
-
-  return {
-    ...base,
-    repo: metadata.full_name || repo,
-    score: adjustedScore,
-    status,
-    summary:
-      status === "healthy"
-        ? `${metadata.full_name} is in strong shape with ${openPrCount} active PR${openPrCount === 1 ? "" : "s"}. Keep the current review cadence and watch the dependency drift.`
-        : status === "watch"
-          ? `${metadata.full_name} is stable but needs attention. ${metadata.open_issues_count} open issues and ${openPrCount} active PRs suggest a moderate review load.`
-          : `${metadata.full_name} needs immediate attention. The repository shows sustained maintenance risk relative to issue load and change cadence.`,
-    checks: [
-      {
-        label: "Repository activity",
-        value: metadata.pushed_at ? new Date(metadata.pushed_at).toLocaleDateString() : "Unknown",
-        trend: metadata.default_branch ? `Default branch: ${metadata.default_branch}` : "Recent push detected",
-      },
-      ...base.checks.slice(0, 3),
-    ],
-    findings: [
-      {
-        title: "GitHub health signal",
-        severity: metadata.open_issues_count > 10 ? "High" : metadata.open_issues_count > 4 ? "Medium" : "Low",
-        description: `${metadata.full_name} has ${metadata.open_issues_count} open issues and ${openPrCount} active PRs. Review backlog risk is ${metadata.open_issues_count > 10 ? "high" : "moderate"}.`,
-      },
-      ...base.findings.slice(0, 2),
-    ],
-    actions: [
-      `Review the top ${Math.min(3, openPrCount || 1)} PR${openPrCount === 1 ? "" : "s"} and merge the low-risk changes first.`,
-      "Tighten dependency upgrades on the default branch before the next release window.",
-      "Add or expand test coverage around the highest-risk service modules.",
-    ],
-  };
-}
-
-export async function processTask(task: QueueTask) {
+export async function processTask(task: QueueTask): Promise<ProcessedTaskResult> {
   const repoName = normalizeGitHubRepoName(task.repo);
-  const mode = task.mode === "github-webhook" ? "on-demand" : task.mode;
-
-  let metadata: Awaited<ReturnType<typeof fetchRepositoryMetadata>> | null = null;
-  let pulls: Awaited<ReturnType<typeof fetchOpenPullRequests>> = [];
+  const mode: ScanMode = task.mode === "github-webhook" ? "on-demand" : task.mode;
 
   const installationId = task.payload.installationId;
+  let token: string | undefined;
 
   if (typeof installationId === "number" && Number.isFinite(installationId)) {
-    const accessToken = await getInstallationTokenOrRefresh(installationId);
-    metadata = await fetchRepositoryMetadata(repoName, accessToken.token);
-    pulls = await fetchOpenPullRequests(repoName, accessToken.token);
+    token = (await getInstallationTokenOrRefresh(installationId)).token;
   } else if (process.env.GITHUB_TOKEN) {
-    metadata = await fetchRepositoryMetadata(repoName, process.env.GITHUB_TOKEN);
-    pulls = await fetchOpenPullRequests(repoName, process.env.GITHUB_TOKEN);
+    token = process.env.GITHUB_TOKEN;
   }
 
-  const healthReport = enrichReportWithMetadata(repoName, mode as ScanMode, metadata, pulls);
+  // Throws for missing/inaccessible repositories — processNextQueuedTask
+  // records the failure on the task instead of losing it.
+  const metadata = await fetchRepositoryMetadata(repoName, token);
+  const pulls = await fetchOpenPullRequests(repoName, token);
+
+  const { result, results } = await runRepoHealthAnalysis({
+    repo: repoName,
+    mode,
+    token,
+    metadata,
+    pulls,
+  });
+
   const resultId = crypto.randomUUID();
 
   await saveAnalysisResult({
     id: resultId,
     repo: repoName,
     mode: mode,
-    status: healthReport.status,
-    score: healthReport.score,
-    summary: healthReport.summary,
-    checks: healthReport.checks,
-    findings: healthReport.findings,
-    actions: healthReport.actions,
+    status: result.status,
+    score: result.score,
+    summary: result.summary,
+    checks: result.checks,
+    findings: result.findings,
+    actions: result.actions,
     metadata: {
       installationId: installationId ?? null,
-      repository: metadata ? metadata.full_name : repoName,
+      repository: metadata.full_name,
       pullRequestCount: pulls.length,
-      issues: metadata?.open_issues_count ?? 0,
-      updatedAt: metadata?.updated_at ?? null,
+      issues: metadata.open_issues_count ?? 0,
+      updatedAt: metadata.updated_at ?? null,
+      analyzers: analyzerMetadata(results),
     },
   });
 
@@ -119,9 +90,65 @@ export async function processTask(task: QueueTask) {
     taskId: task.id,
     repo: repoName,
     status: "completed",
-    result: healthReport,
+    result,
     processedAt: new Date().toISOString(),
     analysisId: resultId,
     pullRequests: pulls.length,
   };
+}
+
+export type TaskOutcome =
+  | { processed: false; reason: "queue-empty" | "worker-busy" }
+  | { processed: true; taskId: string; ok: true; result: ProcessedTaskResult }
+  | { processed: true; taskId: string; ok: false; error: string };
+
+let workerBusy = false;
+
+/**
+ * Processes the next queued task, always awaiting completion:
+ * - success → task marked `completed` with the result payload
+ * - thrown error → task marked `failed` with the error message
+ * - concurrent calls → the second caller reports `worker-busy` instead of
+ *   double-processing (protects the interval scheduler and HTTP trigger)
+ */
+export async function processNextQueuedTask(): Promise<TaskOutcome> {
+  if (workerBusy) {
+    return { processed: false, reason: "worker-busy" };
+  }
+
+  workerBusy = true;
+  try {
+    const tasks = await listTasks();
+    const nextTask = tasks.find((task) => task.status === "queued");
+
+    if (!nextTask) {
+      return { processed: false, reason: "queue-empty" };
+    }
+
+    await updateTaskStatus(nextTask.id, "processing");
+
+    try {
+      const result = await processTask({
+        id: nextTask.id,
+        repo: nextTask.repo,
+        mode: nextTask.mode,
+        type: nextTask.type,
+        payload: nextTask.payload,
+        status: "processing",
+        createdAt: nextTask.createdAt,
+        updatedAt: nextTask.updatedAt,
+      });
+
+      await updateTaskStatus(nextTask.id, "completed", { result });
+
+      return { processed: true, taskId: nextTask.id, ok: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await updateTaskStatus(nextTask.id, "failed", { error: message });
+
+      return { processed: true, taskId: nextTask.id, ok: false, error: message };
+    }
+  } finally {
+    workerBusy = false;
+  }
 }

@@ -18,7 +18,7 @@ type HealthMetric = {
 
 type HealthFinding = {
   title: string;
-  severity: "High" | "Medium" | "Low";
+  severity: "Critical" | "High" | "Medium" | "Low";
   description: string;
 };
 
@@ -142,12 +142,19 @@ export default function Home() {
     setError("");
 
     try {
+      const activeInstallation =
+        installations.find((installation) => installation.status === "active") ??
+        installations[0];
+
       const response = await fetch("/api/repo-health", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(scanForm),
+        body: JSON.stringify({
+          ...scanForm,
+          installationId: activeInstallation?.installationId,
+        }),
       });
 
       const payload = (await response.json()) as RepoHealthResponse & { error?: string };
@@ -499,11 +506,13 @@ export default function Home() {
                           <p className="font-medium text-white">{finding.title}</p>
                           <span
                             className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                              finding.severity === "High"
-                                ? "bg-red-500/10 text-red-300"
-                                : finding.severity === "Medium"
-                                  ? "bg-yellow-500/10 text-yellow-300"
-                                  : "bg-emerald-500/10 text-emerald-300"
+                              finding.severity === "Critical"
+                                ? "bg-red-600/20 text-red-200"
+                                : finding.severity === "High"
+                                  ? "bg-red-500/10 text-red-300"
+                                  : finding.severity === "Medium"
+                                    ? "bg-yellow-500/10 text-yellow-300"
+                                    : "bg-emerald-500/10 text-emerald-300"
                             }`}
                           >
                             {finding.severity}

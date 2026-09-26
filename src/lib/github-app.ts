@@ -135,8 +135,8 @@ export async function exchangeInstallationToken(installationId: number) {
   return (await response.json()) as InstallationTokenResponse;
 }
 
-async function fetchGitHubJson<T>(url: string, token?: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers ?? {});
+function buildGitHubHeaders(token?: string) {
+  const headers = new Headers();
 
   if (token || process.env.GITHUB_TOKEN) {
     headers.set("Authorization", `Bearer ${token ?? process.env.GITHUB_TOKEN}`);
@@ -146,9 +146,13 @@ async function fetchGitHubJson<T>(url: string, token?: string, init?: RequestIni
   headers.set("User-Agent", "repo-health-agent");
   headers.set("X-GitHub-Api-Version", "2022-11-28");
 
+  return headers;
+}
+
+export async function fetchGitHubJson<T>(url: string, token?: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
-    headers,
+    headers: buildGitHubHeaders(token),
   });
 
   if (!response.ok) {
@@ -157,6 +161,83 @@ async function fetchGitHubJson<T>(url: string, token?: string, init?: RequestIni
   }
 
   return (await response.json()) as T;
+}
+
+/**
+ * Non-throwing variant used by analyzers: a missing permission or disabled
+ * feature must degrade a single check, never fail the whole scan.
+ */
+export async function fetchGitHubJsonSafe<T>(
+  url: string,
+  token?: string,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; data: T | null }> {
+  try {
+    const response = await fetch(url, {
+      ...init,
+      headers: buildGitHubHeaders(token),
+    });
+
+    if (!response.ok) {
+      return { ok: false, status: response.status, data: null };
+    }
+
+    return { ok: true, status: response.status, data: (await response.json()) as T };
+  } catch {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+export type GitHubTreeEntry = {
+  path: string;
+  type: "blob" | "tree" | "commit";
+  size?: number;
+};
+
+export type GitHubTree = {
+  sha: string;
+  tree: GitHubTreeEntry[];
+  truncated: boolean;
+};
+
+/** Full file tree of a ref (branch name or SHA) — powers test/manifest detection. */
+export function fetchGitTree(repo: string, ref: string, token?: string) {
+  const normalizedRepo = normalizeGitHubRepoName(repo);
+
+  return fetchGitHubJsonSafe<GitHubTree>(
+    `https://api.github.com/repos/${normalizedRepo}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+    token
+  );
+}
+
+export type GitHubFileContent = {
+  type: string;
+  encoding: string;
+  content: string;
+  size: number;
+};
+
+/** Single file contents at a ref; returns decoded text or null. */
+export async function fetchFileText(
+  repo: string,
+  path: string,
+  ref: string,
+  token?: string
+): Promise<string | null> {
+  const normalizedRepo = normalizeGitHubRepoName(repo);
+  const result = await fetchGitHubJsonSafe<GitHubFileContent>(
+    `https://api.github.com/repos/${normalizedRepo}/contents/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}?ref=${encodeURIComponent(ref)}`,
+    token
+  );
+
+  if (!result.ok || !result.data || result.data.encoding !== "base64") {
+    return null;
+  }
+
+  return Buffer.from(result.data.content, "base64").toString("utf8");
 }
 
 export async function fetchRepositoryMetadata(repo: string, token?: string) {

@@ -1,48 +1,44 @@
-import { listTasks, updateTaskStatus } from "@/lib/persistence";
-import { processTask } from "@/lib/worker";
+import { processNextQueuedTask } from "@/lib/worker";
 
 export async function POST() {
   try {
-    const tasks = await listTasks();
-    const nextTask = tasks.find((task) => task.status === "queued");
+    const outcome = await processNextQueuedTask();
 
-    if (!nextTask) {
+    if (!outcome.processed) {
       return Response.json(
         {
-          message: "No queued tasks to process.",
+          message:
+            outcome.reason === "worker-busy"
+              ? "A task is already being processed."
+              : "No queued tasks to process.",
           task: null,
         },
         { status: 200 }
       );
     }
 
-    await updateTaskStatus(nextTask.id, "processing");
-
-    const result = processTask({
-      id: nextTask.id,
-      repo: nextTask.repo,
-      mode: nextTask.mode,
-      type: nextTask.type,
-      payload: nextTask.payload,
-      status: nextTask.status,
-      createdAt: nextTask.createdAt,
-      updatedAt: nextTask.updatedAt,
-    });
-
-    await updateTaskStatus(nextTask.id, "completed", { result });
+    if (!outcome.ok) {
+      return Response.json(
+        {
+          message: "Task processing failed.",
+          taskId: outcome.taskId,
+          error: outcome.error,
+        },
+        { status: 500 }
+      );
+    }
 
     return Response.json(
       {
         message: "Task processed successfully.",
-        task: result,
+        task: outcome.result,
       },
       { status: 200 }
     );
   } catch (error) {
     return Response.json(
       {
-        error:
-          error instanceof Error ? error.message : "Worker processing failed.",
+        error: error instanceof Error ? error.message : "Worker processing failed.",
       },
       { status: 500 }
     );

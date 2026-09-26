@@ -1,8 +1,22 @@
+import {
+  fetchGitTree,
+  fetchRepositoryMetadata,
+  normalizeGitHubRepoName,
+  type GitHubPullRequestSummary,
+  type GitHubRepositoryMetadata,
+  type GitHubTree,
+} from "@/lib/github-app";
+import { runDependenciesAnalyzer } from "@/lib/analyzers/dependencies";
+import { runMaintenanceAnalyzer } from "@/lib/analyzers/maintenance";
+import { runSecurityAnalyzer } from "@/lib/analyzers/security";
+import { runTestsAnalyzer } from "@/lib/analyzers/tests";
+import type { AnalyzerId, AnalyzerResult } from "@/lib/analyzers/types";
+
 export type ScanMode = "scheduled" | "on-demand" | "cli";
 
 export type HealthFinding = {
   title: string;
-  severity: "High" | "Medium" | "Low";
+  severity: "Critical" | "High" | "Medium" | "Low";
   description: string;
 };
 
@@ -21,58 +35,161 @@ export type RepoHealthResult = {
   actions: string[];
 };
 
-export function analyzeRepo(repo: string, mode: ScanMode): RepoHealthResult {
-  const normalizedRepo = repo.trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\/$/, "");
-  const repoSeed = normalizedRepo.length + (normalizedRepo.match(/\//g)?.length ?? 0) * 12;
-  const modeWeight = mode === "scheduled" ? 10 : mode === "on-demand" ? 6 : 4;
-  const score = Math.min(98, Math.max(42, 92 - (repoSeed % 19) + modeWeight));
+export type RepoAnalysisOptions = {
+  repo: string;
+  mode: ScanMode;
+  token?: string;
+  /**
+   * Repository metadata: pass `undefined` to fetch it (throws on failure),
+   * or `null` to explicitly run without it.
+   */
+  metadata?: GitHubRepositoryMetadata | null;
+  pulls?: GitHubPullRequestSummary[];
+};
 
-  const status = score >= 85 ? "healthy" : score >= 70 ? "watch" : "critical";
+export type RepoAnalysisOutcome = {
+  result: RepoHealthResult;
+  results: AnalyzerResult[];
+};
 
-  const checks = [
-    { label: "Security", value: `${Math.max(62, 96 - (repoSeed % 12))}%`, trend: "+4% vs last run" },
-    { label: "Dependencies", value: `${Math.max(50, 88 - (repoSeed % 15))}%`, trend: "3 updates pending" },
-    { label: "Test coverage", value: `${Math.max(45, 82 - (repoSeed % 18))}%`, trend: "Needs 2 more suites" },
-    { label: "Debt risk", value: `${Math.max(10, 25 + (repoSeed % 21))}%`, trend: "Stable" },
-  ];
+const ANALYZER_WEIGHTS: Record<AnalyzerId, number> = {
+  security: 0.35,
+  dependencies: 0.25,
+  tests: 0.25,
+  maintenance: 0.15,
+};
 
-  const findings: HealthFinding[] = [
-    {
-      title: "Dependency drift",
-      severity: repoSeed % 3 === 0 ? "High" : "Medium",
-      description: "Two direct dependencies are behind their recommended safe versions and are affecting upgrade safety.",
-    },
-    {
-      title: "Coverage gaps",
-      severity: "Medium",
-      description: "Core service modules have no nearby test coverage and are flagged for higher regression risk.",
-    },
-    {
-      title: "Low-risk cleanup",
-      severity: "Low",
-      description: "Several unused exports and duplication hotspots are eligible for safe automated cleanup.",
-    },
-  ];
+const SEVERITY_ORDER: Record<HealthFinding["severity"], number> = {
+  Critical: 0,
+  High: 1,
+  Medium: 2,
+  Low: 3,
+};
 
-  const actions = [
-    "Open a security PR with the latest safe dependency set.",
-    "Add a focused test suite around the high-risk business logic.",
-    "Apply safe lint and dead-code fixes under approval rules.",
-  ];
+function buildSummary(results: AnalyzerResult[]): string {
+  const passing = results.filter((result) => result.status === "pass");
+  const failing = results.filter((result) => result.status === "fail");
+  const warnings = results.filter((result) => result.status === "warn");
+  const unknown = results.filter((result) => result.status === "unknown");
+
+  const parts = [`${passing.length} of ${results.length} checks passing.`];
+
+  if (failing.length > 0) {
+    const details = failing
+      .map((result) => `${result.label}: ${result.findings[0]?.description ?? result.detail}`)
+      .join(" ");
+    parts.push(details);
+  }
+
+  if (warnings.length > 0) {
+    parts.push(`Watch ${warnings.map((result) => result.label).join(", ")}.`);
+  }
+
+  if (unknown.length > 0) {
+    parts.push(`${unknown.map((result) => result.label).join(", ")} could not be evaluated.`);
+  }
+
+  return parts.join(" ");
+}
+
+function buildActions(results: AnalyzerResult[]): string[] {
+  const priority = ["fail", "warn", "unknown", "pass"] as const;
+  const actions: string[] = [];
+
+  for (const status of priority) {
+    for (const result of results) {
+      if (result.status !== status) continue;
+      for (const action of result.actions) {
+        if (!actions.includes(action)) actions.push(action);
+      }
+    }
+  }
+
+  if (actions.length === 0) {
+    actions.push("All checks passing — the next scan will track regressions.");
+  }
+
+  return actions.slice(0, 4);
+}
+
+/**
+ * Runs the real analyzer suite against a repository.
+ *
+ * Each analyzer degrades independently (permission, disabled feature, missing
+ * manifest) and returns `score: null` when it cannot produce a meaningful
+ * signal; null scores are excluded from the weighted total instead of being
+ * counted as zero.
+ */
+export async function runRepoHealthAnalysis(
+  options: RepoAnalysisOptions
+): Promise<RepoAnalysisOutcome> {
+  const normalizedRepo = normalizeGitHubRepoName(options.repo);
+  const { token } = options;
+
+  let metadata = options.metadata;
+  if (metadata === undefined) {
+    // Throws for missing/inaccessible repositories — callers map this to HTTP errors.
+    metadata = await fetchRepositoryMetadata(normalizedRepo, token);
+  }
+
+  let tree: GitHubTree | null = null;
+  const ref = metadata?.default_branch ?? "HEAD";
+
+  if (metadata) {
+    const treeResult = await fetchGitTree(normalizedRepo, ref, token);
+    if (treeResult.ok && treeResult.data) {
+      tree = treeResult.data;
+    }
+  }
+
+  const [security, dependencies, tests, maintenance] = await Promise.all([
+    runSecurityAnalyzer(normalizedRepo, ref, token),
+    runDependenciesAnalyzer({ repo: normalizedRepo, ref, tree, token }),
+    Promise.resolve(runTestsAnalyzer(tree)),
+    Promise.resolve(
+      runMaintenanceAnalyzer({ metadata: metadata ?? null, tree, pulls: options.pulls ?? [] })
+    ),
+  ]);
+
+  const results: AnalyzerResult[] = [security, dependencies, tests, maintenance];
+
+  let weightTotal = 0;
+  let weightedScore = 0;
+  for (const result of results) {
+    if (result.score === null) continue;
+    const weight = ANALYZER_WEIGHTS[result.id];
+    weightedScore += result.score * weight;
+    weightTotal += weight;
+  }
+
+  const score = weightTotal > 0 ? Math.round(weightedScore / weightTotal) : 50;
+  const status: RepoHealthResult["status"] = score >= 85 ? "healthy" : score >= 70 ? "watch" : "critical";
+
+  const findings: HealthFinding[] = results
+    .flatMap((result) => result.findings)
+    .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
+    .slice(0, 6);
 
   return {
-    repo: normalizedRepo,
-    mode,
-    score: Math.round(score),
-    status,
-    summary:
-      status === "healthy"
-        ? "Repository health is strong. The next best move is to tighten coverage on the most business-critical modules."
-        : status === "watch"
-          ? "Repository health is acceptable but trending toward higher maintenance risk. Dependency and test improvements are recommended."
-          : "Repository health is at risk. Immediate follow-up is recommended for dependency hygiene and test coverage.",
-    checks,
-    findings,
-    actions,
+    result: {
+      repo: metadata?.full_name || normalizedRepo,
+      mode: options.mode,
+      score,
+      status,
+      summary: buildSummary(results),
+      checks: results.map((result) => ({
+        label: result.label,
+        value: result.value,
+        trend: result.trend,
+      })),
+      findings,
+      actions: buildActions(results),
+    },
+    results,
   };
+}
+
+/** Per-analyzer detail persisted alongside the result for debugging/audit. */
+export function analyzerMetadata(results: AnalyzerResult[]): Record<string, unknown> {
+  return Object.fromEntries(results.map((result) => [result.id, result.metadata]));
 }
