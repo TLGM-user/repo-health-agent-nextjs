@@ -3,6 +3,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { FeatureCard, type FeatureCardProps } from "@/components/FeatureCard";
 import { Navbar } from "@/components/Navbar";
+import { useTheme } from "@/lib/use-theme";
 
 type ScanFormState = {
   repo: string;
@@ -91,27 +92,13 @@ const initialScanForm: ScanFormState = {
 };
 
 export default function Home() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, toggleTheme } = useTheme();
   const [scanForm, setScanForm] = useState<ScanFormState>(initialScanForm);
   const [result, setResult] = useState<RepoHealthResponse | null>(null);
   const [installations, setInstallations] = useState<InstallationSummary[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState("");
   const [dashboardLoading, setDashboardLoading] = useState(true);
-
-  useEffect(() => {
-    const savedTheme = window.localStorage.getItem("theme");
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const nextTheme = savedTheme ? savedTheme === "dark" : prefersDark;
-
-    setDarkMode(nextTheme);
-    document.documentElement.classList.toggle("dark", nextTheme);
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
-    window.localStorage.setItem("theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
 
   useEffect(() => {
     async function loadInstallations() {
@@ -184,7 +171,7 @@ export default function Home() {
       <Navbar
         navItems={navItems}
         darkMode={darkMode}
-        onToggleTheme={() => setDarkMode((previous) => !previous)}
+        onToggleTheme={toggleTheme}
       />
 
       <main>

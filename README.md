@@ -166,4 +166,3 @@ src/
 
 - Health scoring in `repo-health.ts` is currently heuristic/deterministic rather than backed by real analyzers (SCA, coverage, complexity) — the analysis layer is the next milestone.
 - `POST /api/workers/process` is designed to be called by an external scheduler (cron/CI); there is no built-in cron yet.
-- Lint currently reports one pre-existing error in `src/app/page.tsx` (theme initialization effect).
