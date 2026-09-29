@@ -1,4 +1,5 @@
 import {
+  fetchFileText,
   fetchGitTree,
   fetchRepositoryMetadata,
   normalizeGitHubRepoName,
@@ -11,6 +12,8 @@ import { runMaintenanceAnalyzer } from "@/lib/analyzers/maintenance";
 import { runSecurityAnalyzer } from "@/lib/analyzers/security";
 import { runTestsAnalyzer } from "@/lib/analyzers/tests";
 import type { AnalyzerId, AnalyzerResult } from "@/lib/analyzers/types";
+import { findDeadCodeCandidates, toDeadCodeAnalyzerResult } from "@/lib/scanners/deadcode";
+import { scanTextForSecrets, toSecretsAnalyzerResult, type SecretHit } from "@/lib/scanners/secrets";
 
 export type ScanMode = "scheduled" | "on-demand" | "cli";
 
@@ -53,10 +56,12 @@ export type RepoAnalysisOutcome = {
 };
 
 const ANALYZER_WEIGHTS: Record<AnalyzerId, number> = {
-  security: 0.35,
-  dependencies: 0.25,
-  tests: 0.25,
-  maintenance: 0.15,
+  security: 0.3,
+  dependencies: 0.2,
+  tests: 0.2,
+  maintenance: 0.1,
+  deadcode: 0.1,
+  secrets: 0.1,
 };
 
 const SEVERITY_ORDER: Record<HealthFinding["severity"], number> = {
@@ -151,7 +156,69 @@ export async function runRepoHealthAnalysis(
     ),
   ]);
 
-  const results: AnalyzerResult[] = [security, dependencies, tests, maintenance];
+  // Janitor scanners share one capped, cached file reader so dead-code and
+  // secret scans together stay inside GitHub rate limits (<= ~30 content
+  // fetches per scan; per-file failures degrade silently).
+  const fileCache = new Map<string, string | null>();
+  let contentFetches = 0;
+  const MAX_CONTENT_FETCHES = 30;
+  const readFileCached = async (path: string, maxBytes = 64_000): Promise<string | null> => {
+    if (fileCache.has(path)) return fileCache.get(path) ?? null;
+    if (contentFetches >= MAX_CONTENT_FETCHES) return null;
+    contentFetches += 1;
+    try {
+      const text = await fetchFileText(normalizedRepo, path, ref, token);
+      const capped = text ? text.slice(0, maxBytes) : null;
+      fileCache.set(path, capped);
+      return capped;
+    } catch {
+      fileCache.set(path, null);
+      return null;
+    }
+  };
+
+  const [deadcode, secrets] = await Promise.all([
+    (async () => {
+      try {
+        const candidates = await findDeadCodeCandidates(tree, readFileCached);
+        return toDeadCodeAnalyzerResult(candidates, fileCache.size);
+      } catch {
+        return null;
+      }
+    })(),
+    (async () => {
+      try {
+        if (!tree) return null;
+        const suspicious = tree.tree
+          .filter(
+            (e) =>
+              e.type === "blob" &&
+              /(^|\/)(\.env(\.|$)|[^/]*\.(pem|key|p12|pfx)$|credentials|secrets?)/i.test(e.path) &&
+              (e.size ?? 0) < 200_000
+          )
+          .slice(0, 8);
+        const hits: SecretHit[] = [];
+        await Promise.all(
+          suspicious.map(async (e) => {
+            const text = await readFileCached(e.path, 32_000);
+            if (text) hits.push(...scanTextForSecrets(e.path, text));
+          })
+        );
+        return toSecretsAnalyzerResult(hits, suspicious.length);
+      } catch {
+        return null;
+      }
+    })(),
+  ]);
+
+  const results: AnalyzerResult[] = [
+    security,
+    dependencies,
+    tests,
+    maintenance,
+    ...(deadcode ? [deadcode] : []),
+    ...(secrets ? [secrets] : []),
+  ];
 
   let weightTotal = 0;
   let weightedScore = 0;

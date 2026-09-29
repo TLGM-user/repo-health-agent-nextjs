@@ -10,6 +10,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  precheck:
+    name: Disk precheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate available space
+        run: |
+          df -h /
+          FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          echo "Root free: ${FREE_GB}GB"
+          if [ "$FREE_GB" -lt 5 ]; then echo "FAIL: <5GB free — free runner space before building"; exit 1; fi
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

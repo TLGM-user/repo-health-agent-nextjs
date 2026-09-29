@@ -139,6 +139,9 @@ npm run build      # production build (includes type checking)
 | `GET /api/repo-health` | Always `405` — analysis runs via `POST`. |
 | `POST /api/repo-health` | Real on-demand analysis — `{ repo, mode?, installationId? }`; runs the analyzer suite and stores the result (`404` if the repository is missing, `403` if inaccessible). |
 | `GET /api/tasks` · `POST /api/tasks` | List queued tasks / enqueue one (`repo` required). |
+| `POST /api/fixes/preview` | Signed dry-run fix proposal — `{ repo, installationId? }`; returns prioritized findings + PR preview and records a `fix_runs` audit row (`preview`). No writes. |
+| `POST /api/fixes/apply` | Approval-gated apply — `{ preview, installationId, base? }`; verifies preview HMAC, rejects expired (>24h) or already-applied runs (`422`/`409`), deletes ≤10 P0 files (one commit each) on a new branch, opens a **draft** PR (`201`, unmergeable until human review + green CI). Requires App `Contents:Write` + `Pull requests:Write`. |
+| `GET /fixes` | Approval UI: generate preview, review file list, confirm, and open the PR. |
 | `POST /api/workers/process` | Process the next queued task (external scheduler entry point; the built-in scheduler drives the same worker). |
 
 ### Installation-token refresh

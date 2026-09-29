@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import Link from "next/link";
 import { FeatureCard, type FeatureCardProps } from "@/components/FeatureCard";
 import { Navbar } from "@/components/Navbar";
+import { Testimonials } from "@/components/Testimonials";
+import { CTA } from "@/components/CTA";
 import { useTheme } from "@/lib/use-theme";
 
 type ScanFormState = {
@@ -64,25 +67,31 @@ type InstallationSummary = {
 const navItems = [
   { label: "Features", href: "#features" },
   { label: "Workflow", href: "#workflow" },
-  { label: "Dashboard", href: "#dashboard" },
+  { label: "Testimonials", href: "#testimonials" },
+  { label: "Pricing", href: "/pricing" },
   { label: "Contact", href: "#contact" },
 ];
 
 const features: FeatureCardProps[] = [
   {
     title: "Security scan",
-    description: "Catch dependency vulnerabilities, bad secrets patterns, and risky repo changes before they reach production.",
+    description: "Catch dependency vulnerabilities, secret leaks, and code scanning alerts before they reach production.",
     icon: "🛡️",
   },
   {
-    title: "Dependency automation",
-    description: "Open safe upgrade PRs, group updates, and validate them with CI before they hit the default branch.",
+    title: "Dependency freshness",
+    description: "Track outdated packages across npm, PyPI, and Go modules. Get alerted when majors are pending.",
     icon: "📦",
   },
   {
-    title: "Missing tests",
-    description: "Find risky or untested code paths and suggest targeted tests with confidence scoring and clear rationale.",
+    title: "Test coverage",
+    description: "Find untested code paths and track test density trends over time with CI integration.",
     icon: "🧪",
+  },
+  {
+    title: "Maintenance health",
+    description: "Monitor push age, open issues, archived status, and documentation completeness.",
+    icon: "🔧",
   },
 ];
 
@@ -182,32 +191,33 @@ export default function Home() {
       />
 
       <main>
+        {/* Hero Section */}
         <section className="mx-auto grid max-w-6xl gap-10 px-6 py-16 md:grid-cols-[1.2fr_0.8fr] md:items-center">
           <div>
             <div className="mb-6 inline-flex rounded-full border border-indigo-500/20 bg-indigo-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">
-              Repo Health Agent
+              GitFlow Analytics
             </div>
 
             <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
-              Continuously protect your repo from drift, risk, and technical debt.
+              GitHub repo health monitoring for dev teams
             </h1>
 
             <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-              Scan GitHub repositories for security issues, dependency drift, dead-code hotspots, and missing test coverage. Then turn findings into safe, reviewable PRs.
+              Continuously scan your repositories for security vulnerabilities, dependency drift, missing tests, and maintenance risks. Turn findings into actionable PRs.
             </p>
 
             <div className="mt-8 flex flex-wrap gap-4">
-              <a
-                href="#dashboard"
+              <Link
+                href="/pricing"
                 className="rounded-full bg-indigo-500 px-5 py-3 text-sm font-medium text-white transition hover:bg-indigo-400"
               >
-                View dashboard
-              </a>
+                Start free
+              </Link>
               <a
-                href="#features"
+                href="#dashboard"
                 className="rounded-full border border-slate-700 bg-slate-900 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-slate-500 hover:bg-slate-800"
               >
-                Explore platform
+                Book demo
               </a>
             </div>
 
@@ -284,28 +294,30 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Features Section */}
         <section id="features" className="mx-auto max-w-6xl px-6 py-16">
           <div className="mb-10 text-center">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">
               Platform features
             </p>
-            <h2 className="mt-3 text-3xl font-bold text-white">Everything needed to keep a repo healthy.</h2>
+            <h2 className="mt-3 text-3xl font-bold text-white">Everything needed to keep your repos healthy</h2>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-3">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             {features.map((feature) => (
               <FeatureCard key={feature.title} {...feature} />
             ))}
           </div>
         </section>
 
+        {/* Workflow Section */}
         <section id="workflow" className="bg-slate-900 py-16">
           <div className="mx-auto max-w-6xl px-6">
             <div className="mb-10 text-center">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">
                 Workflow
               </p>
-              <h2 className="mt-3 text-3xl font-bold text-white">A safe automation loop from scan to merge.</h2>
+              <h2 className="mt-3 text-3xl font-bold text-white">A safe automation loop from scan to merge</h2>
             </div>
 
             <div className="grid gap-6 md:grid-cols-4">
@@ -326,6 +338,7 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Dashboard Section */}
         <section id="dashboard" className="mx-auto max-w-6xl px-6 py-16">
           <div className="mb-10 text-center">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">
@@ -544,13 +557,25 @@ export default function Home() {
           )}
         </section>
 
+        {/* Testimonials Section */}
+        <Testimonials />
+
+        {/* CTA Section */}
+        <CTA
+          title="Ready to keep your repos healthy?"
+          subtitle="Start free, upgrade when you need more. No credit card required."
+          href="/pricing"
+          cta="Get started free"
+        />
+
+        {/* Contact Section */}
         <section id="contact" className="mx-auto max-w-6xl px-6 pb-20 pt-4">
           <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-400">Contact</p>
-            <h3 className="mt-3 text-3xl font-bold text-white">Want a repo health agent for your engineering org?</h3>
+            <h3 className="mt-3 text-3xl font-bold text-white">Want GitFlow Analytics for your engineering org?</h3>
             <div className="mt-6 flex flex-wrap gap-4">
-              <a href="mailto:hello@repohealthagent.dev" className="rounded-full bg-white px-5 py-3 text-sm font-medium text-slate-900 transition hover:bg-slate-200">
-                hello@repohealthagent.dev
+              <a href="mailto:hello@gitflowanalytics.dev" className="rounded-full bg-white px-5 py-3 text-sm font-medium text-slate-900 transition hover:bg-slate-200">
+                hello@gitflowanalytics.dev
               </a>
               <a href="#dashboard" className="rounded-full border border-slate-700 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-slate-500 hover:bg-slate-800">
                 Try a scan

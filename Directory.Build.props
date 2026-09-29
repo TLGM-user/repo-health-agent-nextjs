@@ -1,0 +1,12 @@
+<Project>
+  <!-- Storage-aware MSBuild defaults: intermediates + outputs go to F: to spare C:. -->
+  <!-- Import order: this file is auto-imported by MSBuild for all projects in repo. -->
+  <PropertyGroup>
+    <FBuildRoot Condition="'$(FBuildRoot)' == ''">F:\build-cache\msbuild</FBuildRoot>
+    <!-- Per-project subfolders keep incremental builds isolated -->
+    <BaseIntermediateOutputPath>$(FBuildRoot)\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+    <OutputPath>$(FBuildRoot)\$(MSBuildProjectName)\bin\$(Configuration)\</OutputPath>
+    <!-- Keep NuGet fallback + VS cache off C: -->
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+</Project>

@@ -89,6 +89,25 @@ export async function ensureRepoHealthTables() {
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fix_runs (
+      id UUID PRIMARY KEY,
+      repo TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'on-demand',
+      branch TEXT NOT NULL,
+      title TEXT NOT NULL,
+      files JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "eligibleCount" INTEGER NOT NULL DEFAULT 0,
+      "deferredCount" INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'preview',
+      "prNumber" INTEGER,
+      "prUrl" TEXT,
+      "installationId" BIGINT,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
 }
 
 export async function saveInstallation(record: {
@@ -478,6 +497,117 @@ export async function listPullRequests(repo?: string) {
           FROM pull_requests
           ORDER BY "createdAt" DESC
         `,
+    repo ? [repo] : []
+  );
+
+  return result.rows;
+}
+
+export type FixRunStatus = "preview" | "applied" | "failed";
+
+/** Previews expire after 24h — approvals must be fresh, never stale. */
+export const FIX_RUN_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function isFixRunExpired(createdAt: string | Date, now = Date.now()): boolean {
+  return now - new Date(createdAt).getTime() > FIX_RUN_TTL_MS;
+}
+
+export async function saveFixRun(record: {
+  id: string;
+  repo: string;
+  mode: string;
+  branch: string;
+  title: string;
+  files: string[];
+  eligibleCount: number;
+  deferredCount: number;
+  status?: FixRunStatus;
+  installationId?: number | null;
+}) {
+  if (!pool) {
+    throw new Error("POSTGRES_URL or DATABASE_URL is not configured.");
+  }
+
+  await ensureRepoHealthTables();
+
+  const result = await pool.query(
+    `
+      INSERT INTO fix_runs (id, repo, mode, branch, title, files, "eligibleCount", "deferredCount", status, "installationId")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO UPDATE
+      SET repo = EXCLUDED.repo,
+          branch = EXCLUDED.branch,
+          title = EXCLUDED.title,
+          files = EXCLUDED.files,
+          "eligibleCount" = EXCLUDED."eligibleCount",
+          "deferredCount" = EXCLUDED."deferredCount",
+          "updatedAt" = NOW()
+      RETURNING *
+    `,
+    [
+      record.id,
+      record.repo,
+      record.mode,
+      record.branch,
+      record.title,
+      JSON.stringify(record.files),
+      record.eligibleCount,
+      record.deferredCount,
+      record.status ?? "preview",
+      record.installationId ?? null,
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function getFixRun(id: string) {
+  if (!pool) {
+    throw new Error("POSTGRES_URL or DATABASE_URL is not configured.");
+  }
+
+  await ensureRepoHealthTables();
+
+  const result = await pool.query(`SELECT * FROM fix_runs WHERE id = $1 LIMIT 1`, [id]);
+  return result.rows[0] ?? null;
+}
+
+export async function updateFixRun(
+  id: string,
+  patch: { status: FixRunStatus; prNumber?: number | null; prUrl?: string | null; installationId?: number | null }
+) {
+  if (!pool) {
+    throw new Error("POSTGRES_URL or DATABASE_URL is not configured.");
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE fix_runs
+      SET status = $2,
+          "prNumber" = COALESCE($3, "prNumber"),
+          "prUrl" = COALESCE($4, "prUrl"),
+          "installationId" = COALESCE($5, "installationId"),
+          "updatedAt" = NOW()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [id, patch.status, patch.prNumber ?? null, patch.prUrl ?? null, patch.installationId ?? null]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function listFixRuns(repo?: string) {
+  if (!pool) {
+    throw new Error("POSTGRES_URL or DATABASE_URL is not configured.");
+  }
+
+  await ensureRepoHealthTables();
+
+  const result = await pool.query(
+    repo
+      ? `SELECT * FROM fix_runs WHERE repo = $1 ORDER BY "createdAt" DESC`
+      : `SELECT * FROM fix_runs ORDER BY "createdAt" DESC`,
     repo ? [repo] : []
   );
 

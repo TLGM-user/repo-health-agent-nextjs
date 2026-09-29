@@ -1,4 +1,4 @@
-export type AnalyzerId = "security" | "dependencies" | "tests" | "maintenance";
+export type AnalyzerId = "security" | "dependencies" | "tests" | "maintenance" | "deadcode" | "secrets";
 
 export type AnalyzerStatus = "pass" | "warn" | "fail" | "unknown";
 
