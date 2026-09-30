@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --import ./tests/hooks/register.mjs --test \"tests/*.mjs\""
+    "test": "node --experimental-strip-types --import ./tests/hooks/register.mjs --test \"tests/*.mjs\"",
+    "db:migrate": "node --experimental-strip-types --import ./tests/hooks/register.mjs scripts/db-migrate.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.7",

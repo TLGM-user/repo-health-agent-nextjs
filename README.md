@@ -112,6 +112,8 @@ cp .env.example .env
 ```bash
 npm run dev        # http://localhost:3000
 npm run lint       # eslint
+npm test           # unit tests
+npm run db:migrate # ensure Postgres tables exist (same bootstrap the app runs on first use)
 npm run build      # production build (includes type checking)
 ```
 
