@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { stripe, PLANS } from "@/lib/stripe";
+import { getStripe, PLANS } from "@/lib/stripe";
 import { upsertBillingCustomer } from "@/lib/billing";
 
 export async function POST(req: NextRequest) {
@@ -33,14 +33,14 @@ export async function POST(req: NextRequest) {
     let customerId = billing.stripeCustomerId;
 
     if (!customerId) {
-      const customer = await stripe.customers.create({
+      const customer = await getStripe().customers.create({
         metadata: { userId },
       });
       customerId = customer.id;
       await upsertBillingCustomer({ userId, stripeCustomerId: customerId });
     }
 
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe().checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],

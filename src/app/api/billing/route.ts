@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { stripe } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 import { getBillingInfo } from "@/lib/billing";
 
 export async function GET() {
@@ -48,11 +48,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "cancel") {
-      await stripe.subscriptions.update(billing.stripeSubscriptionId, {
+      await getStripe().subscriptions.update(billing.stripeSubscriptionId, {
         cancel_at_period_end: true,
       });
     } else if (action === "resume") {
-      await stripe.subscriptions.update(billing.stripeSubscriptionId, {
+      await getStripe().subscriptions.update(billing.stripeSubscriptionId, {
         cancel_at_period_end: false,
       });
     }
